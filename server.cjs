@@ -43,6 +43,7 @@ const ELEVEN_KEY =
   process.env.ELEVENLABS_API_KEY ||
   process.env.ELEVEN_LABS_API_KEY ||
   process.env["11_Labs"] ||
+  process.env["ELEVEN_KEY"] ||
   "";
 
 // Optional mux
@@ -75,7 +76,6 @@ function findVideoUrl(maybe) {
       const v = stack.pop();
       if (typeof v === "string" && /https?:\/\/.+\.(mp4|mov|m4v|m3u8)(\?|$)/i.test(v)) return v;
       if (v && typeof v === "object") {
-        // common places
         if (typeof v.video_url === "string") return v.video_url;
         if (v.output && typeof v.output.video_url === "string") return v.output.video_url;
         if (v.video && typeof v.video.url === "string") return v.video.url;
@@ -89,7 +89,6 @@ function findVideoUrl(maybe) {
 
 /** POST submit to FAL, then short poll for a ready URL (up to ~25s). */
 async function submitAndMaybeWait(body, modelName) {
-  // Many pipelines accept a "model" or similar flag. We attach it non-destructively.
   const payload = { ...body, model: modelName };
 
   const submitURL = FAL_BASE + FAL_SUBMIT_PATH;
@@ -99,25 +98,21 @@ async function submitAndMaybeWait(body, modelName) {
   try { submitJson = JSON.parse(submitText); } catch { submitJson = { raw: submitText }; }
 
   if (!r.ok) {
-    // Bubble up FAL error
     return { status: r.status, ok: false, error: submitJson.error || submitText || `FAL submit ${r.status}` };
   }
 
-  // Try to extract request/job id from common fields
   const jobId =
     submitJson.request_id || submitJson.id || submitJson.job_id ||
     (submitJson.data && (submitJson.data.request_id || submitJson.data.id)) ||
     null;
 
-  // If FAL already returned a URL, great.
   const immediateUrl = findVideoUrl(submitJson);
   if (immediateUrl) {
     return { status: 200, ok: true, job_id: jobId, video_url: immediateUrl, raw: submitJson };
   }
 
-  // Short polling (5 attempts, ~20-25s total)
   if (!jobId) return { status: 202, ok: true, pending: true, job_id: null, raw: submitJson };
-  const resultBase = FAL_BASE + FAL_RESULT_BASE; // e.g. /v1/pipelines/google/veo/requests
+  const resultBase = FAL_BASE + FAL_RESULT_BASE;
   const resultURL = (id) => `${resultBase}/${encodeURIComponent(id)}`;
 
   for (let i = 0; i < 5; i++) {
@@ -128,7 +123,6 @@ async function submitAndMaybeWait(body, modelName) {
     if (sr.ok) {
       const url = findVideoUrl(sj);
       if (url) return { status: 200, ok: true, job_id: jobId, video_url: url, raw: sj };
-      // continue polling if clearly pending
       if (/pending|running|processing/i.test(JSON.stringify(sj))) continue;
     }
   }
@@ -198,7 +192,7 @@ app.post("/generate-quality", async (req, res) => {
   }
 });
 
-// Result polling (simple passthrough using configured base)
+// Result polling
 app.get("/result/:jobId", async (req, res) => {
   try {
     if (!BASIC_AUTH) return res.status(401).json({ success:false, error:"FAL auth missing" });
@@ -306,7 +300,7 @@ app.use("/static", express.static(STATIC_ROOT, {
   setHeaders: (res) => res.setHeader("Cache-Control", "public, max-age=31536000, immutable")
 }));
 
-// Root (intentionally 404 so Railway doesn’t rely on it as a healthcheck)
+// Root
 app.get("/", (_req, res) => res.status(404).send("OK"));
 
 // Start
