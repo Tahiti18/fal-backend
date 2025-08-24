@@ -300,8 +300,8 @@ app.use("/static", express.static(STATIC_ROOT, {
   setHeaders: (res) => res.setHeader("Cache-Control", "public, max-age=31536000, immutable")
 }));
 
-// Root
-app.get("/", (_req, res) => res.status(404).send("OK"));
+// Root (for Railway healthcheck)
+app.get("/", (_req, res) => res.status(200).send("Backend running OK"));
 
 // Start
 app.listen(PORT, () => {
