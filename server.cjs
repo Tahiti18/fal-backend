@@ -1,69 +1,32 @@
-// fal-backend: minimal proxy to fal.ai
-// Accepts your frontend calls:
-//   POST /generate-fast     -> FAL_UPSTREAM_FAST
-//   POST /generate-quality  -> FAL_UPSTREAM_QUALITY
-// Auth header format: "Key <FAL_KEY_ID>:<FAL_KEY_SECRET>"
+// server.cjs — fal.ai proxy backend (CommonJS, Node >= 18)
 
 const express = require("express");
 const cors = require("cors");
-const fetch = (...args) => import("node-fetch").then(({ default: f }) => f(...args));
+const fetch = require("node-fetch");
 
 const app = express();
 app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
-app.use(express.json({ limit: "4mb" }));
+app.use(express.json({ limit: "2mb" }));
 
-const PORT     = process.env.PORT || 8080;
-const KEY_ID   = process.env.FAL_KEY_ID || "";
-const KEY_SEC  = process.env.FAL_KEY_SECRET || "";
-const FAST_URL = (process.env.FAL_UPSTREAM_FAST || "").replace(/\/$/,"");
-const QUAL_URL = (process.env.FAL_UPSTREAM_QUALITY || "").replace(/\/$/,"");
+// -------- ENV --------
+const PORT = process.env.PORT || 8080;
 
-function authHeaders() {
-  const h = { "Content-Type": "application/json" };
-  if (KEY_ID && KEY_SEC) h.Authorization = `Key ${KEY_ID}:${KEY_SEC}`;
-  return h;
-}
+// fal.ai credentials (you already set these in Railway)
+const FAL_KEY_ID = process.env.FAL_KEY_ID || "";
+const FAL_KEY_SECRET = process.env.FAL_KEY_SECRET || "";
 
-const okEnv = () => !!KEY_ID && !!KEY_SEC && !!FAST_URL && !!QUAL_URL;
+// Where to send your video jobs on fal.ai (set these in Railway)
+// Examples (YOU fill with the ones that worked for you):
+//   FAL_FAST_URL=https://fal.run/xxx/veo-fast
+//   FAL_QUALITY_URL=https://fal.run/yyy/veo-quality
+// If your flow returns a request id you can poll, set:
+//   FAL_RESULT_BASE=https://fal.run/requests   (so /requests/:id is valid)
+const FAL_FAST_URL    = (process.env.FAL_FAST_URL || "").replace(/\/$/,"");
+const FAL_QUALITY_URL = (process.env.FAL_QUALITY_URL || "").replace(/\/$/,"");
+const FAL_RESULT_BASE = (process.env.FAL_RESULT_BASE || "").replace(/\/$/,"");
 
-// Health + simple diag (no secrets leaked)
-app.get("/health", (_req, res) => {
-  res.json({
-    ok: okEnv(),
-    ts: new Date().toISOString(),
-    falKeyPresent: !!(KEY_ID && KEY_SEC),
-    fastConfigured: !!FAST_URL,
-    qualityConfigured: !!QUAL_URL
-  });
-});
-
-async function proxyJsonPost(target, req, res, timeoutMs = 120000) {
-  if (!target) return res.status(500).json({ success:false, error:"Upstream URL missing" });
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const r = await fetch(target, {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify(req.body || {}),
-      signal: ctrl.signal
-    });
-    const text = await r.text();
-    let data = {}; try { data = JSON.parse(text); } catch { data = { raw: text }; }
-    return res.status(r.status).json(data);
-  } catch (e) {
-    const msg = e && e.name === "AbortError" ? "Upstream timeout" : (e.message || String(e));
-    return res.status(502).json({ success:false, error: msg });
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-// Frontend-facing routes
-app.post("/generate-fast",    (req, res) => proxyJsonPost(FAST_URL, req, res));
-app.post("/generate-quality", (req, res) => proxyJsonPost(QUAL_URL, req, res));
-
-// Optional: if your fal flow returns a job id and needs polling, add a /result passthrough here.
-
-// Start
-app.listen(PORT, "0.0.0.0", () => console.log(`[OK] fal-backend on :${PORT}`));
+// Basic auth header for fal.ai
+function falAuthHeader() {
+  if (!FAL_KEY_ID || !FAL_KEY_SECRET) return null;
+  const token = Buffer.from(`${FAL_KEY_ID}:${FAL_KEY_SECRET}`).toString("base64");
+  return `Basic ${token
